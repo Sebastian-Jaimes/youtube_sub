@@ -16,15 +16,15 @@
 #define ESP32_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
 #define ESP32_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
 
-#define API_KEY         "AIzaSyCRuQWNdDq7vlEPlJXIxuBbjLKE0-goUkk"
-#define CHANNEL_ID      "UCuCl93NjLSbGbJEF4IzGWRg"
+#define ESP32_API_KEY        CONFIG_API_KEY
+#define ESP32_CHANNEL_ID     CONFIG_CHANNEL_ID
 
 
 //https://www.googleapis.com/youtube/v3/channels?id=UCuCl93NjLSbGbJEF4IzGWRg&key=AIzaSyCRuQWNdDq7vlEPlJXIxuBbjLKE0-goUkk&part=statistics
 //https://www.googleapis.com/youtube/v3/channels?id=UCuCl93NjLSbGbJEF4IzGWRg&key=AIzaSyCRuQWNdDq7vlEPlJXIxuBbjLKE0-goUkk&part=snippet,statistics
 
-//https://www.googleapis.com/youtube/v3/channels?id="CHANNEL_ID"&key="API_KEY"&part=statistics
-//https://www.googleapis.com/youtube/v3/channels?id="CHANNEL_ID"&key="API_KEY"&part=snippet,statistics
+//https://www.googleapis.com/youtube/v3/channels?id="ESP32_CHANNEL_ID"&key="ESP32_API_KEY"&part=statistics
+//https://www.googleapis.com/youtube/v3/channels?id="ESP32_CHANNEL_ID"&key="ESP32_API_KEY"&part=snippet,statistics
 
 
 /* FreeRTOS event group to signal when we are connected*/
@@ -114,8 +114,8 @@ static void http_request_task (void *pvParameters)
 
         // Se configura la petición HTTP
         esp_http_client_config_t config_get = {
-            //.url = "https://www.googleapis.com/youtube/v3/channels?id="CHANNEL_ID"&key="API_KEY"&part=snippet,statistics",
-            .url = "https://www.googleapis.com/youtube/v3/channels?id="CHANNEL_ID"&key="API_KEY"&part=statistics",
+            //.url = "https://www.googleapis.com/youtube/v3/channels?id="ESP32_CHANNEL_ID"&key="ESP32_API_KEY"&part=snippet,statistics",
+            .url = "https://www.googleapis.com/youtube/v3/channels?id="ESP32_CHANNEL_ID"&key="ESP32_API_KEY"&part=statistics",
             .method = HTTP_METHOD_GET,
             .cert_pem = NULL,
             .event_handler = client_event_get_handler,
@@ -137,7 +137,7 @@ static void http_request_task (void *pvParameters)
         esp_http_client_cleanup(client);
 
         // Reinicia en 1 segundo
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(60000));
     }
 }
 
