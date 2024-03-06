@@ -1,4 +1,5 @@
 #include <string.h>
+#include <sys/param.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -36,6 +37,11 @@ static const char *TAG = "Youtube Project";
 
 static int s_retry_num = 0;
 
+// Buffer para acumular datos
+#define MAX_BUFFER_SIZE 4096
+static char buffer[MAX_BUFFER_SIZE];
+static size_t buffer_len = 0;
+
 
 static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
@@ -45,11 +51,11 @@ static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_b
         if (s_retry_num < ESP32_MAXIMUM_RETRY) {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
+            ESP_LOGE(TAG, "retry to connect to the AP");
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
         }
-        ESP_LOGI(TAG,"connect to the AP fail");
+        ESP_LOGE(TAG,"connect to the AP fail");
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
@@ -58,20 +64,43 @@ static void wifi_event_handler(void *event_handler_arg, esp_event_base_t event_b
     }
 }
 
-static esp_err_t client_event_get_handler(esp_http_client_event_t *evt) {
+
+static esp_err_t client_event_get_handler(esp_http_client_event_t *evt) 
+{
     switch (evt->event_id) {
         case HTTP_EVENT_ERROR:
             ESP_LOGE(TAG, "HTTP_EVENT_ERROR");
             break;
         case HTTP_EVENT_ON_DATA:
-            char *data_string = malloc(evt->data_len + 1);
-            if (data_string == NULL) {
-                break;
+            // Verifica si hay espacio suficiente en el búfer
+            if ((buffer_len + evt->data_len) < MAX_BUFFER_SIZE) {
+                // Copia los datos al búfer
+                memcpy(buffer + buffer_len, evt->data, evt->data_len);
+                buffer_len += evt->data_len;
             }
-            memcpy(data_string, evt->data, evt->data_len);
-            data_string[evt->data_len] = '\0';  // Agregar el carácter nulo al final
-            printf("HTTP_EVENT_ON_DATA: %s", data_string);
-            free(data_string);
+            break;
+        case HTTP_EVENT_ON_FINISH:
+            //printf("Solicitud HTTP completada. Total de bytes recibidos: %zu\n", buffer_len);
+
+            cJSON *json_root = cJSON_Parse(buffer);
+            if (json_root != NULL) {
+
+                cJSON *items = cJSON_GetObjectItemCaseSensitive(json_root, "items");
+                cJSON *first_item = cJSON_GetArrayItem(items, 0);
+                cJSON *statistics = cJSON_GetObjectItemCaseSensitive(first_item, "statistics");
+                cJSON *subscriber_count = cJSON_GetObjectItemCaseSensitive(statistics, "subscriberCount");
+
+                if (cJSON_IsString(subscriber_count)) {
+                    const char *subscriber_count_str = subscriber_count->valuestring;
+                    ESP_LOGI(TAG, "Subscriber Count: %s", subscriber_count_str);
+                }
+
+                cJSON_Delete(json_root);
+            } else {
+                ESP_LOGE(TAG, "Error al analizar JSON.\n");
+            }
+
+            buffer_len = 0; // Se limpia el buffer
             break;
         default:
             break;
@@ -79,19 +108,37 @@ static esp_err_t client_event_get_handler(esp_http_client_event_t *evt) {
     return ESP_OK;
 }
 
-static void rest_get() {
-    esp_http_client_config_t config_get = {
-        //.url = "https://www.googleapis.com/youtube/v3/channels?id="CHANNEL_ID"&key="API_KEY"&part=snippet,statistics",
-        .url = "https://www.googleapis.com/youtube/v3/channels?id="CHANNEL_ID"&key="API_KEY"&part=statistics",
-        .method = HTTP_METHOD_GET,
-        .cert_pem = NULL,
-        .event_handler = client_event_get_handler,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
+static void http_request_task (void *pvParameters)
+{
+    while (1) {
 
-    esp_http_client_handle_t client = esp_http_client_init(&config_get);
-    esp_http_client_perform(client);
-    esp_http_client_cleanup(client);
+        // Se configura la petición HTTP
+        esp_http_client_config_t config_get = {
+            //.url = "https://www.googleapis.com/youtube/v3/channels?id="CHANNEL_ID"&key="API_KEY"&part=snippet,statistics",
+            .url = "https://www.googleapis.com/youtube/v3/channels?id="CHANNEL_ID"&key="API_KEY"&part=statistics",
+            .method = HTTP_METHOD_GET,
+            .cert_pem = NULL,
+            .event_handler = client_event_get_handler,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+        };
+
+        esp_http_client_handle_t client = esp_http_client_init(&config_get);
+
+        // Realiza la solicitud HTTP
+        esp_err_t err = esp_http_client_perform(client);
+
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Solicitud HTTP exitosa\n");
+        } else {
+            ESP_LOGE(TAG, "Error en la solicitud HTTP: %d\n", err);
+        }
+
+        // Limpia el cliente HTTP
+        esp_http_client_cleanup(client);
+
+        // Reinicia en 1 segundo
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
 
 void wifi_init_sta(void)
@@ -128,7 +175,7 @@ void wifi_init_sta(void)
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s", ESP32_WIFI_SSID, ESP32_WIFI_PASS);
     } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s", ESP32_WIFI_SSID, ESP32_WIFI_PASS);
+        ESP_LOGE(TAG, "Failed to connect to SSID:%s, password:%s", ESP32_WIFI_SSID, ESP32_WIFI_PASS);
     } else {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
     }
@@ -136,7 +183,7 @@ void wifi_init_sta(void)
 
 void app_main(void)
 {
-    //Initialize NVS
+    // Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
@@ -147,5 +194,8 @@ void app_main(void)
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
     wifi_init_sta();
 
-    rest_get();
+    // Task creation
+    static uint8_t ucParameterToPass;
+    TaskHandle_t xHandle = NULL;
+    xTaskCreate(&http_request_task, "http_request_task", 8192, &ucParameterToPass, 1, &xHandle);
 }
